@@ -18,6 +18,9 @@ namespace Mediapipe.Unity
 
   public class PointListAnnotation : ListAnnotation<PointAnnotation>
   {
+    public GameObject RightIndex;
+    public GameObject LeftIndex;
+
     [SerializeField] private Color _color = Color.green;
     [SerializeField] private float _radius = 15.0f;
 
@@ -63,6 +66,12 @@ namespace Mediapipe.Unity
         {
           if (annotation != null) { annotation.Draw(target, scale, visualizeZ); }
         });
+      }
+
+      if (RightIndex != null && LeftIndex != null)
+      {
+        RightIndex.transform.position = children[20].transform.position;
+        LeftIndex.transform.position = children[19].transform.position;
       }
     }
 

@@ -161,6 +161,12 @@ namespace Mediapipe.Unity.Sample.PoseLandmarkDetection
 
     private void OnPoseLandmarkDetectionOutput(PoseLandmarkerResult result, Image image, long timestamp)
     {
+      if (result.poseLandmarks != null && result.poseLandmarks.Count > 0)
+      {
+          var lms = result.poseLandmarks[0].landmarks;
+          for (int i = 0; i < lms.Count && i < 33; i++)
+              PoseBuffer.Write(i, lms[i].x, lms[i].y, lms[i].z);
+      }
       _poseLandmarkerResultAnnotationController.DrawLater(result);
       DisposeAllMasks(result);
     }

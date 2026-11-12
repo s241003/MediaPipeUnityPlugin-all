@@ -19,7 +19,7 @@ namespace Mediapipe.Unity
   {
     [SerializeField] private Shader _maskShader;
     [SerializeField] private Texture2D _maskTexture;
-    [SerializeField] private Color _color = Color.blue;
+    [SerializeField] private Color _color = Color.red;
     [SerializeField, Range(0, 1)] private float _threshold = 0.9f;
 
     private GameObject _screenObject;
