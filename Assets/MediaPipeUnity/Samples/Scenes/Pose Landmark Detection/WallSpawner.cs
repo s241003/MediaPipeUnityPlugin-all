@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using UnityEngine;
 
 // 壁を順に(またはランダムに)出す。GameManager が SetActive で開始/停止する
+// 旧版からの変更：付ける採点役が WallJudge → WallJudge2D になったことと、
+// 物理判定が無くなったのでレイヤー設定をやめたことだけ。
 public class WallSpawner : MonoBehaviour
 {
     public enum PickMode { Sequential, Random }
@@ -13,7 +15,7 @@ public class WallSpawner : MonoBehaviour
 
     [Header("経路(2点のzの差で、進む向きを決める)")]
     public Transform spawnPoint;                // 奥(出現位置。x,yが壁の位置になる)
-    public Transform judgePoint;                // プレイヤーの平面(Avatar の Plane Z と同じz)
+    public Transform judgePoint;                // プレイヤーの平面(BodySegments2D の planeZ と同じ z に置く)
     public float despawnDistance = 3f;          // 通り過ぎてから消すまでの距離
 
     [Header("進行")]
@@ -21,9 +23,6 @@ public class WallSpawner : MonoBehaviour
     public float interval = 2f;                 // 壁が通り過ぎてから次を出すまで
     public float speedUpPerWall = 0.05f;        // 1枚ごとに速度倍率へ足す量
     public float maxSpeedMultiplier = 2f;
-
-    [Header("レイヤー名")]
-    public string wallLayerName = "Wall";
 
     int _index, _count;
 
@@ -76,10 +75,7 @@ public class WallSpawner : MonoBehaviour
         go.name = data.displayName;
         go.transform.localScale *= data.uniformScale;
 
-        int layer = LayerMask.NameToLayer(wallLayerName);
-        foreach (var t in go.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = layer;
-
-        if (go.GetComponent<WallJudge>() == null) go.AddComponent<WallJudge>();   // 採点役
+        if (go.GetComponent<WallJudge2D>() == null) go.AddComponent<WallJudge2D>();   // 採点役
 
         var runner = go.AddComponent<WallRunner>();
         float dirSign = Mathf.Sign(judgePoint.position.z - spawnPoint.position.z);

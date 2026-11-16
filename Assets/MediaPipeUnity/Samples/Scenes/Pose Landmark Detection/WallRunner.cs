@@ -1,6 +1,7 @@
 using UnityEngine;
 
-// 壁をz方向に動かすだけ。判定・採点は WallJudge が行う。WallSpawner が自動で付ける(手動で付けない)
+// 壁をz方向に動かすだけ。判定・採点は WallJudge2D が行う。WallSpawner が自動で付ける（手動で付けない）
+// 旧版からの変更は、判定平面の参照先が BodyColliders → BodySegments2D になったことだけ。
 public class WallRunner : MonoBehaviour
 {
     public bool PassedPlane { get; private set; }   // 壁全体がプレイヤーの平面を通り過ぎた
@@ -26,7 +27,7 @@ public class WallRunner : MonoBehaviour
         if (!_ready) return;
         transform.position += _dir * _speed * Time.deltaTime;
 
-        float plane = BodyColliders.Instance != null ? BodyColliders.Instance.PlaneZ : _fallbackPlaneZ;
+        float plane = BodySegments2D.Instance != null ? BodySegments2D.Instance.PlaneZ : _fallbackPlaneZ;
         float minZ = transform.position.z, maxZ = minZ;
         if (_rends.Length > 0)
         {

@@ -1,6 +1,12 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+// ポーズ（骨の向き）をアバターへ反映する。
+// 刷新点：
+//  - ユーザーの「位置」は一切調整しない（旧版の followPosition とキャリブレーションを廃止）。
+//    アバターの置き場所はシーンで決めた場所のまま。位置合わせはユーザー側がカメラに合わせて行う。
+//  - ルート（アバター全体）の position / rotation には触らない。回すのは骨だけ。
+//  - ポーズが古くなったら（カメラから外れたら）更新を止め、IsReady が false になる。
 public class AvatarRetarget : MonoBehaviour
 {
     [Header("アバター(Humanoid設定のモデルのAnimator)")]
@@ -12,16 +18,13 @@ public class AvatarRetarget : MonoBehaviour
     public float smoothing = 15f;      // 大きいほど速く追従、小さいほど滑らか
 
     [Header("奥行き")]
-    public bool flattenZ = true;       // オン:見た目も判定も z = Plane Z の平面に固定する
-    public float planeZ = 0f;
+    public bool flattenZ = true;       // オン:骨の向きを平面内で決める（アバター自体は動かない）
 
-    [Header("位置の追従(本人の大きさに左右されない)")]
-    public bool followPosition = true;
-    public float calibrateDelay = 3f;      // 最初の検出から、基準の登録を始めるまでの秒数
-    public float calibrateDuration = 1f;   // 基準の登録にかける秒数
-    public bool recalibrate;               // Play中にチェックを入れると、基準を登録し直す
+    [Header("ポーズの鮮度")]
+    public float staleSeconds = 0.5f;  // この秒数より古いポーズは使わない（提案値：実測で調整）
 
-    public bool IsCalibrated => _calibrated;
+    // ポーズが生きていれば true。GameManager はこれを見て開始する（キャリブレーションの代わり）
+    public bool IsReady => PoseBuffer.HasFreshData;
 
     static readonly (HumanBodyBones bone, HumanBodyBones child, int a, int b)[] Map = {
         (HumanBodyBones.LeftUpperArm,  HumanBodyBones.LeftLowerArm,  11, 13),
@@ -53,14 +56,6 @@ public class AvatarRetarget : MonoBehaviour
     readonly Vector3[] _raw = new Vector3[33];
     readonly Vector3[] _w = new Vector3[33];
 
-    // 位置の基準
-    Vector3 _hipsAnchor;          // モデルの腰の初期位置(基準の姿勢のとき、ここに来る)
-    float _modelTorso;            // モデルの胴の長さ
-    bool _calibrated, _calibrating;
-    float _firstDataTime = -1f, _calibEnd, _posScale, _torsoSum;
-    Vector2 _hipRef, _hipSum;
-    int _calibCount;
-
     void Start()
     {
         _root = animator.transform;
@@ -85,13 +80,6 @@ public class AvatarRetarget : MonoBehaviour
         _hipsRestRot = Quaternion.Inverse(_root.rotation) * _hips.rotation;
         _hipsCurrent = _hips.rotation;
 
-        _hipsAnchor = _hips.position;
-        Vector3 sMid = (animator.GetBoneTransform(HumanBodyBones.LeftUpperArm).position
-                      + animator.GetBoneTransform(HumanBodyBones.RightUpperArm).position) * 0.5f;
-        Vector3 hMid = (animator.GetBoneTransform(HumanBodyBones.LeftUpperLeg).position
-                      + animator.GetBoneTransform(HumanBodyBones.RightUpperLeg).position) * 0.5f;
-        _modelTorso = Vector3.Distance(sMid, hMid);
-        
         _head = animator.GetBoneTransform(HumanBodyBones.Head);
         if (_head != null)
         {
@@ -102,7 +90,8 @@ public class AvatarRetarget : MonoBehaviour
 
     void LateUpdate()
     {
-        if (!PoseBuffer.TryRead(_raw)) return;
+        // 古いポーズでは更新しない（人が画角から外れたらアバターはその場で止まる）
+        if (!PoseBuffer.TryReadFresh(_raw, staleSeconds)) return;
 
         for (int i = 0; i < 33; i++)
             _w[i] = new Vector3((0.5f - _raw[i].x) * aspect,
@@ -111,14 +100,7 @@ public class AvatarRetarget : MonoBehaviour
 
         float k = 1f - Mathf.Exp(-smoothing * Time.deltaTime);
 
-        // 画像上の腰・肩の位置(画像の高さ=1の単位)
-        Vector2 hip2 = new Vector2((0.5f - (_raw[23].x + _raw[24].x) * 0.5f) * aspect,
-                                   0.5f - (_raw[23].y + _raw[24].y) * 0.5f);
-        Vector2 sh2 = new Vector2((0.5f - (_raw[11].x + _raw[12].x) * 0.5f) * aspect,
-                                  0.5f - (_raw[11].y + _raw[12].y) * 0.5f);
-        UpdateCalibration(hip2, Vector2.Distance(sh2, hip2));
-
-        // 胴(Hips)
+        // 胴(Hips)の向き：肩と腰の位置関係から決める（位置ではなく向きだけ）
         Vector3 up = (_w[11] + _w[12]) * 0.5f - (_w[23] + _w[24]) * 0.5f;
         Vector3 right = _w[12] - _w[11];
         Vector3 fwd = flattenZ ? Vector3.forward : Vector3.Cross(right, up);
@@ -129,7 +111,7 @@ public class AvatarRetarget : MonoBehaviour
             _hips.rotation = _hipsCurrent;
         }
 
-                // 頭:首の向きと、左右の耳を結ぶ線から、頭の傾きを決める
+        // 頭：首の向きと、左右の耳を結ぶ線から傾きを決める
         if (_head != null)
         {
             Vector3 earMid = (_w[7] + _w[8]) * 0.5f;
@@ -163,60 +145,6 @@ public class AvatarRetarget : MonoBehaviour
             p.bone.rotation = p.current;
         }
 
-        // 位置:基準からの移動量を、胴の長さの比で拡大・縮小して写す
-        if (followPosition && _calibrated)
-        {
-            Vector2 d = hip2 - _hipRef;
-            Vector3 target = _hipsAnchor + new Vector3(d.x, d.y, 0f) * _posScale;
-            target.z = flattenZ ? planeZ : _hips.position.z;
-            _root.position += (target - _hips.position) * k;
-        }
-    }
-
-    void UpdateCalibration(Vector2 hip2, float torso2)
-    {
-        float now = Time.time;
-        if (_firstDataTime < 0f)
-        {
-            _firstDataTime = now;
-            Debug.Log($"[Retarget] {calibrateDelay}秒後に基準を登録します。直立して正面を向いてください");
-        }
-
-        if (recalibrate) { recalibrate = false; BeginCalibration(now); }
-        else if (!_calibrated && !_calibrating && now - _firstDataTime >= calibrateDelay)
-            BeginCalibration(now);
-
-        if (_calibrating)
-        {
-            _hipSum += hip2;
-            _torsoSum += torso2;
-            _calibCount++;
-            if (now >= _calibEnd) FinishCalibration();
-        }
-    }
-
-    void BeginCalibration(float now)
-    {
-        _calibrating = true;
-        _calibEnd = now + calibrateDuration;
-        _hipSum = Vector2.zero;
-        _torsoSum = 0f;
-        _calibCount = 0;
-        Debug.Log("[Retarget] 基準を登録中です。動かないでください");
-    }
-
-    void FinishCalibration()
-    {
-        _calibrating = false;
-        float refTorso = _calibCount > 0 ? _torsoSum / _calibCount : 0f;
-        if (refTorso < 1e-3f)
-        {
-            Debug.LogWarning("[Retarget] 基準の登録に失敗しました(上半身が検出できていません)");
-            return;
-        }
-        _hipRef = _hipSum / _calibCount;
-        _posScale = _modelTorso / refTorso;
-        _calibrated = true;
-        Debug.Log($"[Retarget] 基準登録完了(倍率 {_posScale:F2})");
+        // ※位置の追従はしない。アバターのルートはシーンで置いた場所から動かさない。
     }
 }

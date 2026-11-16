@@ -973,7 +973,6 @@ MonoBehaviour:
   interval: 2
   speedUpPerWall: 0.05
   maxSpeedMultiplier: 2
-  wallLayerName: Wall
 --- !u!95 &1661635314 stripped
 Animator:
   m_CorrespondingSourceObject: {fileID: 5866666021909216657, guid: 45f14283b3591b84ea27f2305a1f922f,
@@ -1142,27 +1141,26 @@ MonoBehaviour:
   m_GameObject: {fileID: 1896898373}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 53c3718adebf74946a62d84f6341ac67, type: 3}
+  m_Script: {fileID: 11500000, guid: 82f362c05182c7f41be11ca641e00ec2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
   animator: {fileID: 1661635314}
-  fitToMesh: 1
-  fitPercentile: 0.9
-  radiusScale: 1
-  upperArmRadius: 0.1
-  foreArmRadius: 0.08
-  thighRadius: 0.16
-  shinRadius: 0.12
-  footRadius: 0.07
-  handExtend: 0.25
-  headWidth: 0.3
-  headHeight: 0.45
-  headCenterOffset: 0.2
-  torsoWidthScale: 1.1
-  torsoWidthMin: 0.4
-  torsoHeightScale: 1.1
-  torsoDepth: 0.4
-  drawGizmos: 1
+  planeZ: 52.85
+  torsoRadiusRatio: 0.3
+  headRadiusRatio: 0.2
+  upperArmRadiusRatio: 0.1
+  foreArmRadiusRatio: 0.09
+  handRadiusRatio: 0.07
+  handExtendRatio: 0.2
+  thighRadiusRatio: 0.15
+  shinRadiusRatio: 0.11
+  footRadiusRatio: 0.08
+  showProxies: 1
+  proxyZOffset: 1.5
+  proxyThin: 0.4
+  flashSeconds: 1.2
+  normalColor: {r: 0.25, g: 0.85, b: 0.85, a: 1}
+  hitColor: {r: 1, g: 0.15, b: 0.15, a: 1}
 --- !u!1 &1920210230
 GameObject:
   m_ObjectHideFlags: 0
@@ -1212,11 +1210,7 @@ MonoBehaviour:
   zScale: 1
   smoothing: 15
   flattenZ: 1
-  planeZ: 57.6
-  followPosition: 1
-  calibrateDelay: 3
-  calibrateDuration: 1
-  recalibrate: 0
+  staleSeconds: 0.5
 --- !u!1 &1969388814
 GameObject:
   m_ObjectHideFlags: 0
@@ -1354,18 +1348,15 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   retarget: {fileID: 1920210232}
+  body: {fileID: 1896898374}
   spawnerObject: {fileID: 1449294827}
   timeLimit: 60
   maxLives: 5
   countdownSeconds: 3
-  greatPoints: 100
+  perfectPoints: 100
   goodPoints: 50
   comboBonus: 0.1
   maxMultiplier: 2
-  state: 0
-  lives: 0
-  score: 0
-  combo: 0
 --- !u!1001 &8571076842648159877
 PrefabInstance:
   m_ObjectHideFlags: 0
