@@ -42,6 +42,7 @@ public class GameManager : MonoBehaviour
     void Start()
     {
         _lives = maxLives;
+        if (_heartTex == null) _heartTex = MakeHeartTexture();   // OnGUI の中で作ると Editor の Assertion が出ることがあるため、ここで作る
         SetSpawner(false);
         _state = GameState.WaitingPose;
     }
@@ -54,6 +55,7 @@ public class GameManager : MonoBehaviour
 
     void BeginCountdown()
     {
+        if (retarget != null) retarget.Recenter();   // カウントダウン時点の立ち位置をホームにする
         _lives = maxLives;
         _score = 0;
         _combo = 0;
@@ -118,7 +120,7 @@ public class GameManager : MonoBehaviour
             _lives--;
             _combo = 0;
             if (body != null) body.FlashParts(r.hitLabels);   // 接触部位を赤くする
-            ShowPopup($"ぶつかりました：{r.parts}", new Color(1f, 0.3f, 0.3f));
+            ShowPopup("BAD", new Color(1f, 0.3f, 0.3f));   // 接触箇所は文字で出さず、部位の赤色表示だけで伝える
         }
         else if (r.rating == WallJudge2D.Rating.Perfect)
         {
@@ -196,7 +198,7 @@ public class GameManager : MonoBehaviour
     static Texture2D _heartTex;
     void DrawHeart(Rect r, bool filled)
     {
-        if (_heartTex == null) _heartTex = MakeHeartTexture();
+        if (_heartTex == null) return;
         var prev = GUI.color;
         GUI.color = filled ? new Color(1f, 0.25f, 0.45f) : new Color(0.35f, 0.35f, 0.35f, 0.6f);
         GUI.DrawTexture(r, _heartTex);
@@ -211,14 +213,15 @@ public class GameManager : MonoBehaviour
         for (int y = 0; y < N; y++)
         for (int x = 0; x < N; x++)
         {
-            float u = (x / (float)(N - 1)) * 2f - 1f;
-            float v = (y / (float)(N - 1)) * 2f - 1f;
+            float u = (x / (float)(N - 1)) * 2.2f - 1.1f;
+            float v = (y / (float)(N - 1)) * 2.2f - 1.1f;
             float a = u * u + v * v - 1f;
-            bool inside = a * a * a + u * u * v * v * v < 0f;
+            bool inside = a * a * a - u * u * v * v * v < 0f;   // ハート型の陰関数（符号が + だと上部が埋まって五角形になる）
             px[y * N + x] = inside ? Color.white : Color.clear;
         }
         tex.SetPixels(px);
         tex.Apply();
+        tex.hideFlags = HideFlags.HideAndDontSave;   // 実行時生成のテクスチャは保存対象にしない
         return tex;
     }
 }

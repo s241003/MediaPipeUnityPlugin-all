@@ -2,8 +2,10 @@ using System.Collections.Generic;
 using UnityEngine;
 
 // 壁の判定（旧 WallJudge の置き換え）。Physics / MeshCollider / FixedUpdate は使わない。
-//  - スポーン時に1回だけ、壁メッシュを壁ローカルの2D格子に焼く（三角形を投影して塗る）。
-//    投影する面は「壁の厚み方向」を自動判定して決める（Blender製の壁はローカルYが厚み）。
+//  - スポーン時に1回だけ、壁メッシュを「ワールド座標の X,Y 平面」の2D格子に焼く。
+//    壁はスポーン時の回転でプレイヤーに正対し、その後は world Z へまっすぐ進むだけなので、
+//    ワールドの X,Y への投影がそのまま壁の正面図になる。
+//    （旧方式は壁ローカル空間で焼いていて、FBXのノード構成によって格子が潰れる問題があった）
 //    格子の端からたどれる「外側の空気」は穴と数えない（外形が四角くない壁でも充填率の上限が下がらない）。
 //  - 壁がプレイヤー平面を跨いだ瞬間に1回だけ、その時点のポーズで採点する。
 //  - 評価は Bad / Good / Perfect。壁の実体セルに体が触れていたら接触（部位名つき）で Bad。
@@ -51,13 +53,13 @@ public class WallJudge2D : MonoBehaviour
     BodySegments2D _body;
     bool _baked, _resolved, _sideSet;
     float _prevSideSign, _centerOffsetZ;
+    Vector3 _spawnPos;                        // 焼いたときの壁の位置（セルはこの時点のワールド座標で持つ）
 
-    // 焼いた格子（壁ローカルの「面」座標 u,v。面は厚み軸を除いた2軸）
-    int _uAxis, _vAxis, _depthAxis;           // 0=x, 1=y, 2=z
-    float _minU, _minV, _centerDepth, _cell;
+    // 焼いた格子（スポーン時点のワールド X,Y）
+    float _minX, _minY, _cell;
     int _nx, _ny;
-    readonly List<Vector2> _holeCells = new List<Vector2>();   // 穴のセル中心（u,v）
-    readonly List<Vector2> _solidCells = new List<Vector2>();  // 壁の実体のセル中心（u,v）
+    readonly List<Vector2> _holeCells = new List<Vector2>();   // 穴のセル中心（ワールド x,y）
+    readonly List<Vector2> _solidCells = new List<Vector2>();  // 壁の実体のセル中心（ワールド x,y）
 
     void OnEnable() { All.Add(this); }
     void OnDisable() { All.Remove(this); }
@@ -82,27 +84,22 @@ public class WallJudge2D : MonoBehaviour
         _prevSideSign = side;
     }
 
-    static float Comp(Vector3 v, int axis) => axis == 0 ? v.x : axis == 1 ? v.y : v.z;
-    static string AxisName(int axis) => axis == 0 ? "X" : axis == 1 ? "Y" : "Z";
-
-    // 壁メッシュを壁ローカルの2D格子に焼く（1回だけ）
+    // 壁メッシュをワールド X,Y 平面の2D格子に焼く（1回だけ）
     void Bake()
     {
         var filters = GetComponentsInChildren<MeshFilter>();
         if (filters.Length == 0) { Debug.LogError("WallJudge2D: MeshFilter がありません", this); return; }
 
-        // 全頂点を壁ローカルへ写し、範囲を決める
-        var localVerts = new List<Vector3[]>();
-        var localTris = new List<int[]>();
+        // 全頂点をワールドへ写し、範囲を決める
+        var worldVerts = new List<Vector3[]>();
+        var worldTris = new List<int[]>();
         Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
         Vector3 max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
-        Matrix4x4 toLocal = transform.worldToLocalMatrix;
         string unreadable = null;
         foreach (var mf in filters)
         {
             var mesh = mf.sharedMesh;
             if (mesh == null) continue;
-            Matrix4x4 m = toLocal * mf.transform.localToWorldMatrix;
             Vector3[] verts = mesh.vertices;
             if (verts.Length == 0 && mesh.vertexCount > 0)
             {
@@ -110,64 +107,50 @@ public class WallJudge2D : MonoBehaviour
                 unreadable = mesh.name;
                 continue;
             }
-            var lv = new Vector3[verts.Length];
+            Matrix4x4 m = mf.transform.localToWorldMatrix;
+            var wv = new Vector3[verts.Length];
             for (int i = 0; i < verts.Length; i++)
             {
-                lv[i] = m.MultiplyPoint3x4(verts[i]);
-                min = Vector3.Min(min, lv[i]);
-                max = Vector3.Max(max, lv[i]);
+                wv[i] = m.MultiplyPoint3x4(verts[i]);
+                min = Vector3.Min(min, wv[i]);
+                max = Vector3.Max(max, wv[i]);
             }
             // 三角形はサブメッシュごとに取る（mesh.triangles 決め打ちより確実）
             var trisAll = new List<int>();
             for (int s = 0; s < mesh.subMeshCount; s++)
                 trisAll.AddRange(mesh.GetTriangles(s));
-            localVerts.Add(lv);
-            localTris.Add(trisAll.ToArray());
+            worldVerts.Add(wv);
+            worldTris.Add(trisAll.ToArray());
         }
         if (unreadable != null)
         {
             Debug.LogError($"WallJudge2D: メッシュ「{unreadable}」を読み取れません。FBX を選択し、Inspector の Model タブで Read/Write を有効にして Apply してください", this);
             return;
         }
-        if (localVerts.Count == 0) { Debug.LogError("WallJudge2D: メッシュがありません", this); return; }
+        if (worldVerts.Count == 0) { Debug.LogError("WallJudge2D: メッシュがありません", this); return; }
 
-        // 厚み方向＝ローカルの広がりが一番小さい軸。面は残りの2軸で作る。
-        // （以前は面を X,Y 決め打ちにしていて、Yが厚みの壁を横から見た形に焼いてしまっていた）
-        Vector3 size = max - min;
-        _depthAxis = 0;
-        if (size.y < size.x && size.y <= size.z) _depthAxis = 1;
-        else if (size.z < size.x && size.z < size.y) _depthAxis = 2;
-        _uAxis = (_depthAxis + 1) % 3;
-        _vAxis = (_depthAxis + 2) % 3;
-        _centerDepth = Comp((min + max) * 0.5f, _depthAxis);
-
+        _spawnPos = transform.position;
         // 厚み中心の world z は、壁が world Z へまっすぐ進む限り一定のずれで表せる
-        Vector3 centerWorld = transform.TransformPoint((min + max) * 0.5f);
-        _centerOffsetZ = centerWorld.z - transform.position.z;
+        _centerOffsetZ = (min.z + max.z) * 0.5f - _spawnPos.z;
+        _minX = min.x; _minY = min.y;
 
-        float minU = Comp(min, _uAxis), maxU = Comp(max, _uAxis);
-        float minV = Comp(min, _vAxis), maxV = Comp(max, _vAxis);
-        _minU = minU; _minV = minV;
-
-        // 三角形を面（u,v）へ投影する
+        // 三角形をワールド X,Y へ投影する（壁の正面図）
         var tris = new List<(Vector2 a, Vector2 b, Vector2 c)>();
-        for (int f = 0; f < localVerts.Count; f++)
+        for (int f = 0; f < worldVerts.Count; f++)
         {
-            Vector3[] lv = localVerts[f];
-            int[] idx = localTris[f];
+            Vector3[] wv = worldVerts[f];
+            int[] idx = worldTris[f];
             for (int t = 0; t + 2 < idx.Length; t += 3)
             {
-                Vector3 A = lv[idx[t]], B = lv[idx[t + 1]], C = lv[idx[t + 2]];
-                tris.Add((new Vector2(Comp(A, _uAxis), Comp(A, _vAxis)),
-                          new Vector2(Comp(B, _uAxis), Comp(B, _vAxis)),
-                          new Vector2(Comp(C, _uAxis), Comp(C, _vAxis))));
+                Vector3 A = wv[idx[t]], B = wv[idx[t + 1]], C = wv[idx[t + 2]];
+                tris.Add((new Vector2(A.x, A.y), new Vector2(B.x, B.y), new Vector2(C.x, C.y)));
             }
         }
-        if (tris.Count == 0) { Debug.LogError($"WallJudge2D: 三角形がありません（メッシュ数={localVerts.Count}）。FBX の中身を確認してください", this); return; }
+        if (tris.Count == 0) { Debug.LogError($"WallJudge2D: 三角形がありません（メッシュ数={worldVerts.Count}）。FBX の中身を確認してください", this); return; }
 
         _cell = Mathf.Max(0.01f, cellRatio * _body.TorsoLength);
-        _nx = Mathf.Clamp(Mathf.CeilToInt((maxU - minU) / _cell), 1, 512);
-        _ny = Mathf.Clamp(Mathf.CeilToInt((maxV - minV) / _cell), 1, 512);
+        _nx = Mathf.Clamp(Mathf.CeilToInt((max.x - min.x) / _cell), 1, 512);
+        _ny = Mathf.Clamp(Mathf.CeilToInt((max.y - min.y) / _cell), 1, 512);
 
         var solid = new bool[_nx * _ny];
         foreach (var tri in tris) Rasterize(tri.a, tri.b, tri.c, solid);
@@ -195,12 +178,12 @@ public class WallJudge2D : MonoBehaviour
         for (int i = 0; i < _nx; i++)
         {
             int id = j * _nx + i;
-            Vector2 c = new Vector2(_minU + (i + 0.5f) * _cell, _minV + (j + 0.5f) * _cell);
+            Vector2 c = new Vector2(_minX + (i + 0.5f) * _cell, _minY + (j + 0.5f) * _cell);
             if (solid[id]) _solidCells.Add(c);
             else if (!exterior[id]) _holeCells.Add(c);
         }
 
-        Debug.Log($"[WallJudge2D] {name}: 厚み軸={AxisName(_depthAxis)} 格子={_nx}x{_ny} 穴={_holeCells.Count} 実体={_solidCells.Count}", this);
+        Debug.Log($"[WallJudge2D] {name}: 格子={_nx}x{_ny} 穴={_holeCells.Count} 実体={_solidCells.Count}", this);
         if (_holeCells.Count == 0)
             Debug.LogWarning("WallJudge2D: 穴が見つかりません。壁に穴が貫通しているか確認してください", this);
         _baked = true;
@@ -216,14 +199,14 @@ public class WallJudge2D : MonoBehaviour
         float maxx = Mathf.Max(a.x, Mathf.Max(b.x, c.x)) + dilate;
         float miny = Mathf.Min(a.y, Mathf.Min(b.y, c.y)) - dilate;
         float maxy = Mathf.Max(a.y, Mathf.Max(b.y, c.y)) + dilate;
-        int i0 = Mathf.Clamp(Mathf.FloorToInt((minx - _minU) / _cell), 0, _nx - 1);
-        int i1 = Mathf.Clamp(Mathf.FloorToInt((maxx - _minU) / _cell), 0, _nx - 1);
-        int j0 = Mathf.Clamp(Mathf.FloorToInt((miny - _minV) / _cell), 0, _ny - 1);
-        int j1 = Mathf.Clamp(Mathf.FloorToInt((maxy - _minV) / _cell), 0, _ny - 1);
+        int i0 = Mathf.Clamp(Mathf.FloorToInt((minx - _minX) / _cell), 0, _nx - 1);
+        int i1 = Mathf.Clamp(Mathf.FloorToInt((maxx - _minX) / _cell), 0, _nx - 1);
+        int j0 = Mathf.Clamp(Mathf.FloorToInt((miny - _minY) / _cell), 0, _ny - 1);
+        int j1 = Mathf.Clamp(Mathf.FloorToInt((maxy - _minY) / _cell), 0, _ny - 1);
         for (int j = j0; j <= j1; j++)
         for (int i = i0; i <= i1; i++)
         {
-            Vector2 p = new Vector2(_minU + (i + 0.5f) * _cell, _minV + (j + 0.5f) * _cell);
+            Vector2 p = new Vector2(_minX + (i + 0.5f) * _cell, _minY + (j + 0.5f) * _cell);
             if (DistanceToTriangle(p, a, b, c) <= dilate) solid[j * _nx + i] = true;
         }
     }
@@ -248,15 +231,12 @@ public class WallJudge2D : MonoBehaviour
         return !(neg && pos);
     }
 
-    Vector2 CellWorldXY(Vector2 uv)
+    Vector2 CellWorldXY(Vector2 cell)
     {
-        // 面座標（u,v）＋厚み中心から壁ローカル座標を復元してワールドへ写す
-        Vector3 local = Vector3.zero;
-        if (_uAxis == 0) local.x = uv.x; else if (_uAxis == 1) local.y = uv.x; else local.z = uv.x;
-        if (_vAxis == 0) local.x = uv.y; else if (_vAxis == 1) local.y = uv.y; else local.z = uv.y;
-        if (_depthAxis == 0) local.x = _centerDepth; else if (_depthAxis == 1) local.y = _centerDepth; else local.z = _centerDepth;
-        Vector3 w = transform.TransformPoint(local);
-        return new Vector2(w.x, w.y);
+        // 壁は Z 方向にしか動かないので、セルの x,y はスポーン時から変わらない。
+        // 念のため x,y の移動量だけ足しておく（通常は 0）。
+        Vector3 d = transform.position - _spawnPos;
+        return new Vector2(cell.x + d.x, cell.y + d.y);
     }
 
     void Resolve()

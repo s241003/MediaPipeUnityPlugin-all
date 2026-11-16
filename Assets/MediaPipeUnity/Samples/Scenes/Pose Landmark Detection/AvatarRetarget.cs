@@ -1,11 +1,12 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// ポーズ（骨の向き）をアバターへ反映する。
+// ポーズ（骨の向き）と、腰の横・縦移動をアバターへ反映する。
 // 刷新点：
-//  - ユーザーの「位置」は一切調整しない（旧版の followPosition とキャリブレーションを廃止）。
-//    アバターの置き場所はシーンで決めた場所のまま。位置合わせはユーザー側がカメラに合わせて行う。
-//  - ルート（アバター全体）の position / rotation には触らない。回すのは骨だけ。
+//  - 旧版のキャリブレーション（直立3秒＋1秒平均）は廃止。代わりに「ゲーム開始時の立ち位置」を
+//    基準（ホーム）にして、そこからの腰の移動量をそのままアバターの X,Y に写す。
+//    位置を勝手に補正はしない（写すのは本人の移動量だけ）。※2026-11-17、宇留野の選択で移動反映を追加。
+//  - ルートの rotation には触らない。動かすのは骨の回転と、ルートの X,Y だけ（Z はシーンの置き場所のまま）。
 //  - ポーズが古くなったら（カメラから外れたら）更新を止め、IsReady が false になる。
 public class AvatarRetarget : MonoBehaviour
 {
@@ -22,6 +23,13 @@ public class AvatarRetarget : MonoBehaviour
 
     [Header("ポーズの鮮度")]
     public float staleSeconds = 0.5f;  // この秒数より古いポーズは使わない（提案値：実測で調整）
+
+    [Header("位置の追従（腰の横・縦移動）")]
+    public bool followPosition = true;
+    public float moveRangeX = 40f;     // 腰が画面の端（中心から0.5）まで動いたときのアバターの移動量×2。提案値：実測で調整
+    public float moveRangeY = 24f;     // 縦は横より小さめ。提案値：実測で調整
+    public bool flipX = false;         // 左右が逆に動くときだけオン
+    public bool flipY = false;         // 上下が逆に動くときだけオン
 
     // ポーズが生きていれば true。GameManager はこれを見て開始する（キャリブレーションの代わり）
     public bool IsReady => PoseBuffer.HasFreshData;
@@ -49,6 +57,9 @@ public class AvatarRetarget : MonoBehaviour
     }
 
     Transform _root, _hips;
+    Vector3 _homePos;                  // シーンで置いた場所（ホーム）。Z はずっとこれ
+    Vector2 _refHip;                   // 基準にした腰の画面内位置（正規化座標）
+    bool _hasRef;
     Part[] _parts;
     Quaternion _hipsRestRot, _hipsCurrent;
     Transform _head;
@@ -56,9 +67,13 @@ public class AvatarRetarget : MonoBehaviour
     readonly Vector3[] _raw = new Vector3[33];
     readonly Vector3[] _w = new Vector3[33];
 
+    // 基準（ホーム）を「いまの立ち位置」に取り直す。GameManager がゲーム開始時に呼ぶ
+    public void Recenter() { _hasRef = false; }
+
     void Start()
     {
         _root = animator.transform;
+        _homePos = _root.position;
 
         var list = new List<Part>();
         foreach (var m in Map)
@@ -99,6 +114,20 @@ public class AvatarRetarget : MonoBehaviour
                                 flattenZ ? 0f : -_raw[i].z * aspect * zScale);
 
         float k = 1f - Mathf.Exp(-smoothing * Time.deltaTime);
+
+        // 位置の追従：腰（23,24の中点）の画面内位置を、基準からの移動量としてアバターの X,Y に写す。
+        // 画面の向きの都合：利用者が自分の左へ動くと画像の x は増えるが、画面では左＝world の -X 側なので符号を反転する（骨の変換と同じ流儀）。
+        if (followPosition)
+        {
+            Vector2 hip = new Vector2((_raw[23].x + _raw[24].x) * 0.5f, (_raw[23].y + _raw[24].y) * 0.5f);
+            if (!_hasRef) { _refHip = hip; _hasRef = true; }
+            float ox = -(hip.x - _refHip.x) * moveRangeX * (flipX ? -1f : 1f);
+            float oy = -(hip.y - _refHip.y) * moveRangeY * (flipY ? -1f : 1f);
+            ox = Mathf.Clamp(ox, -moveRangeX * 0.6f, moveRangeX * 0.6f);
+            oy = Mathf.Clamp(oy, -moveRangeY * 0.6f, moveRangeY * 0.6f);
+            Vector3 target = new Vector3(_homePos.x + ox, _homePos.y + oy, _homePos.z);
+            _root.position = Vector3.Lerp(_root.position, target, k);
+        }
 
         // 胴(Hips)の向き：肩と腰の位置関係から決める（位置ではなく向きだけ）
         Vector3 up = (_w[11] + _w[12]) * 0.5f - (_w[23] + _w[24]) * 0.5f;
@@ -145,6 +174,6 @@ public class AvatarRetarget : MonoBehaviour
             p.bone.rotation = p.current;
         }
 
-        // ※位置の追従はしない。アバターのルートはシーンで置いた場所から動かさない。
+        // ※ルートの回転には触らない。位置は上の「位置の追従」で X,Y だけ動かす。
     }
 }
