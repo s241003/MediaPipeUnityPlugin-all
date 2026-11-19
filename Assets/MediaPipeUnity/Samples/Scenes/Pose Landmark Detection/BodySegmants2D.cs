@@ -35,7 +35,8 @@ public class BodySegments2D : MonoBehaviour
     public float footRadiusRatio = 0.08f;
 
     [Header("接触部位の赤色表示")]
-    public bool showProxies = true;
+    public bool showProxies = true;          // 水色の線（プロキシ）の表示。プレイ中に切り替えても即反映される
+    public KeyCode toggleProxiesKey = KeyCode.V;   // プレイ中に表示を切り替えるキー（None で無効）
     public float proxyZOffset = 1.5f;        // アバターよりカメラ側にどれだけ出すか
     public float proxyThin = 0.4f;           // プロキシの太さ（実半径に対する比）
     public float flashSeconds = 1.2f;        // 赤くする時間
@@ -72,6 +73,7 @@ public class BodySegments2D : MonoBehaviour
     readonly List<Proxy> _proxies = new List<Proxy>();
     Transform _lSh, _rSh, _lHp, _rHp, _head, _neck;
     bool _built;
+    bool _visApplied, _visValue;   // showProxies の反映状態（変化したときだけ SetActive する）
 
     void Awake() { Instance = this; }
     void OnDestroy() { if (Instance == this) Instance = null; }
@@ -204,7 +206,7 @@ public class BodySegments2D : MonoBehaviour
 
     void BuildProxies()
     {
-        if (!showProxies) return;
+        // 表示・非表示は showProxies 側で切り替えるので、ここでは常に作る
         var holder = new GameObject("BodyProxies");
         foreach (var s in Segments)
         {
@@ -221,10 +223,27 @@ public class BodySegments2D : MonoBehaviour
         }
     }
 
+    void Update()
+    {
+        if (toggleProxiesKey != KeyCode.None && Input.GetKeyDown(toggleProxiesKey))
+            showProxies = !showProxies;
+    }
+
+    // showProxies の変化をプロキシの表示に反映する
+    void ApplyProxyVisibility()
+    {
+        if (_visApplied && _visValue == showProxies) return;
+        foreach (var px in _proxies) px.go.SetActive(showProxies);
+        _visApplied = true;
+        _visValue = showProxies;
+    }
+
     void LateUpdate()
     {
         Refresh();
-        if (!_built || !showProxies) return;
+        if (!_built) return;
+        ApplyProxyVisibility();
+        if (!showProxies) return;
         float now = Time.time;
         int n = Mathf.Min(_proxies.Count, Segments.Count);
         for (int i = 0; i < n; i++)
@@ -265,6 +284,7 @@ public class BodySegments2D : MonoBehaviour
 
     void OnDrawGizmos()
     {
+        if (!showProxies) return;   // ギズモの水色線も同じスイッチで消す
         if (!Application.isPlaying) return;
         foreach (var s in Segments)
         {

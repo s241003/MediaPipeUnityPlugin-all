@@ -17,6 +17,7 @@ public class AvatarRetarget : MonoBehaviour
     public float aspect = 4f / 3f;     // カメラの 幅/高さ (640x480 なら 4/3)
     public float zScale = 1f;          // Flatten Z がオフのときだけ使う
     public float smoothing = 15f;      // 大きいほど速く追従、小さいほど滑らか
+    public bool mirrorLeftRight = true;   // アバターと向かい合うので鏡像が正解（右手を挙げたら画面右側の腕が上がる）。逆に感じたらオフ
 
     [Header("奥行き")]
     public bool flattenZ = true;       // オン:骨の向きを平面内で決める（アバター自体は動かない）
@@ -45,6 +46,12 @@ public class AvatarRetarget : MonoBehaviour
         (HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot,     26, 28),
         (HumanBodyBones.LeftFoot,      HumanBodyBones.LeftToes,      27, 31),
         (HumanBodyBones.RightFoot,     HumanBodyBones.RightToes,     28, 32),
+    };
+
+    // ランドマークの左右ペア（鏡像化のために入れ替える）
+    static readonly int[] SwapLR = {
+        0, 4, 5, 6, 1, 2, 3, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15,
+        18, 17, 20, 19, 22, 21, 24, 23, 26, 25, 28, 27, 30, 29, 32, 31
     };
 
     class Part
@@ -109,9 +116,12 @@ public class AvatarRetarget : MonoBehaviour
         if (!PoseBuffer.TryReadFresh(_raw, staleSeconds)) return;
 
         for (int i = 0; i < 33; i++)
-            _w[i] = new Vector3((0.5f - _raw[i].x) * aspect,
-                                (0.5f - _raw[i].y),
-                                flattenZ ? 0f : -_raw[i].z * aspect * zScale);
+        {
+            int src = mirrorLeftRight ? SwapLR[i] : i;   // 鏡像：左の骨には右側のランドマークを使う
+            _w[i] = new Vector3((0.5f - _raw[src].x) * aspect,
+                                (0.5f - _raw[src].y),
+                                flattenZ ? 0f : -_raw[src].z * aspect * zScale);
+        }
 
         float k = 1f - Mathf.Exp(-smoothing * Time.deltaTime);
 
