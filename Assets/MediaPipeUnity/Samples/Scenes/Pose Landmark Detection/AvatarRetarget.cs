@@ -8,6 +8,13 @@ using UnityEngine;
 //    位置を勝手に補正はしない（写すのは本人の移動量だけ）。※2026-11-17、宇留野の選択で移動反映を追加。
 //  - ルートの rotation には触らない。動かすのは骨の回転と、ルートの X,Y だけ（Z はシーンの置き場所のまま）。
 //  - ポーズが古くなったら（カメラから外れたら）更新を止め、IsReady が false になる。
+//  - 認識の安定化（v1.12）：ランドマーク自体を平滑化し、信頼度（visibility）の低い点では骨を回さない。
+//    頭は「肩→鼻」の向きだけで決め（耳の線で傾ける旧方式はブレの原因だったので廃止）、
+//    回転上限＋首への配分つき。手の骨も手首→指の付け根の向きで駆動する。
+//  - v1.12a（2026-11-19）：信頼度（visibility）の左右も鏡像入れ替えに合わせた。
+//    v1.12 はランドマークの座標だけ SwapLR で入れ替え、信頼度は入れ替え前の番号で
+//    見ていたため、片手・片足だけ隠れたときに逆側の骨が止まる（隠れた側は回り続ける）
+//    ことがあった。_vis[] に入れ替え後の信頼度を並べ、判定はすべて _vis[] で行う。
 public class AvatarRetarget : MonoBehaviour
 {
     [Header("アバター(Humanoid設定のモデルのAnimator)")]
@@ -24,6 +31,12 @@ public class AvatarRetarget : MonoBehaviour
 
     [Header("ポーズの鮮度")]
     public float staleSeconds = 0.5f;  // この秒数より古いポーズは使わない（提案値：実測で調整）
+
+    [Header("認識の安定化")]
+    public float landmarkSmoothing = 25f;   // ランドマーク自体の平滑化（大きいほどブレが減るが遅れる）。手首・耳のブレ対策
+    public float minVisibility = 0.3f;      // 信頼度がこれ未満の点は骨の更新に使わない（隠れた点のゴミ座標で回さない）
+    public float maxHeadAngle = 50f;        // 頭の回転の上限（度）。首があらぬ方向へ曲がらないように
+    public float distalSmoothingScale = 0.6f;   // 前腕・手は平滑化を強めにする（ブレが目立つため）
 
     [Header("位置の追従（腰の横・縦移動）")]
     public bool followPosition = true;
@@ -46,6 +59,9 @@ public class AvatarRetarget : MonoBehaviour
         (HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot,     26, 28),
         (HumanBodyBones.LeftFoot,      HumanBodyBones.LeftToes,      27, 31),
         (HumanBodyBones.RightFoot,     HumanBodyBones.RightToes,     28, 32),
+        // 手の骨：手首→人差し指の付け根（19/20）の向きで回す。指の骨が無いモデルでは自動でスキップされる
+        (HumanBodyBones.LeftHand,      HumanBodyBones.LeftMiddleProximal,  15, 19),
+        (HumanBodyBones.RightHand,     HumanBodyBones.RightMiddleProximal, 16, 20),
     };
 
     // ランドマークの左右ペア（鏡像化のために入れ替える）
@@ -58,6 +74,7 @@ public class AvatarRetarget : MonoBehaviour
     {
         public Transform bone;
         public int a, b;
+        public bool distal;   // 前腕・手（ブレが目立つので平滑化を強める）
         public Vector3 restDir;
         public Quaternion restRot;
         public Quaternion current;
@@ -69,10 +86,13 @@ public class AvatarRetarget : MonoBehaviour
     bool _hasRef;
     Part[] _parts;
     Quaternion _hipsRestRot, _hipsCurrent;
-    Transform _head;
-    Quaternion _headRestRot, _headCurrent;
+    Transform _head, _neck;
+    Quaternion _headRestRot, _headCurrent, _neckRestRot, _neckCurrent;
     readonly Vector3[] _raw = new Vector3[33];
     readonly Vector3[] _w = new Vector3[33];
+    readonly Vector3[] _ws = new Vector3[33];   // 平滑化したランドマーク（実際に使うのはこちら）
+    readonly float[] _vis = new float[33];     // 入れ替え後の信頼度（骨と同じ左右で見る。座標の SwapLR と対にする）
+    bool _wsInit;
 
     // 基準（ホーム）を「いまの立ち位置」に取り直す。GameManager がゲーム開始時に呼ぶ
     public void Recenter() { _hasRef = false; }
@@ -91,6 +111,7 @@ public class AvatarRetarget : MonoBehaviour
             list.Add(new Part
             {
                 bone = bone, a = m.a, b = m.b,
+                distal = m.a == 13 || m.a == 14 || m.a == 15 || m.a == 16,
                 restDir = _root.InverseTransformDirection((child.position - bone.position).normalized),
                 restRot = Quaternion.Inverse(_root.rotation) * bone.rotation,
                 current = bone.rotation
@@ -108,6 +129,13 @@ public class AvatarRetarget : MonoBehaviour
             _headRestRot = Quaternion.Inverse(_root.rotation) * _head.rotation;
             _headCurrent = _head.rotation;
         }
+
+        _neck = animator.GetBoneTransform(HumanBodyBones.Neck);
+        if (_neck != null)
+        {
+            _neckRestRot = Quaternion.Inverse(_root.rotation) * _neck.rotation;
+            _neckCurrent = _neck.rotation;
+        }
     }
 
     void LateUpdate()
@@ -121,7 +149,13 @@ public class AvatarRetarget : MonoBehaviour
             _w[i] = new Vector3((0.5f - _raw[src].x) * aspect,
                                 (0.5f - _raw[src].y),
                                 flattenZ ? 0f : -_raw[src].z * aspect * zScale);
+            _vis[i] = PoseBuffer.Visibility(src);   // 信頼度も同じ src（入れ替え後）で取る。入れ替え前だと左右が逆になる
         }
+
+        // ランドマーク自体を平滑化する（手首・耳などの細かいブレを、そのまま骨に伝えない）
+        float kl = 1f - Mathf.Exp(-landmarkSmoothing * Time.deltaTime);
+        if (!_wsInit) { System.Array.Copy(_w, _ws, 33); _wsInit = true; }
+        else for (int i = 0; i < 33; i++) _ws[i] = Vector3.Lerp(_ws[i], _w[i], kl);
 
         float k = 1f - Mathf.Exp(-smoothing * Time.deltaTime);
 
@@ -140,47 +174,62 @@ public class AvatarRetarget : MonoBehaviour
         }
 
         // 胴(Hips)の向き：肩と腰の位置関係から決める（位置ではなく向きだけ）
-        Vector3 up = (_w[11] + _w[12]) * 0.5f - (_w[23] + _w[24]) * 0.5f;
-        Vector3 right = _w[12] - _w[11];
+        Vector3 up = (_ws[11] + _ws[12]) * 0.5f - (_ws[23] + _ws[24]) * 0.5f;
+        Vector3 right = _ws[12] - _ws[11];
         Vector3 fwd = flattenZ ? Vector3.forward : Vector3.Cross(right, up);
-        if (up.sqrMagnitude > 1e-6f && fwd.sqrMagnitude > 1e-6f)
+        bool torsoVisible = _vis[11] >= minVisibility && _vis[12] >= minVisibility
+                            && _vis[23] >= minVisibility && _vis[24] >= minVisibility;
+        if (torsoVisible && up.sqrMagnitude > 1e-6f && fwd.sqrMagnitude > 1e-6f)
         {
             Quaternion target = _root.rotation * Quaternion.LookRotation(fwd, up) * _hipsRestRot;
             _hipsCurrent = Quaternion.Slerp(_hipsCurrent, target, k);
             _hips.rotation = _hipsCurrent;
         }
 
-        // 頭：首の向きと、左右の耳を結ぶ線から傾きを決める
+        // 頭と首：肩の中心→鼻（0）の向きだけで決める。
+        // 旧方式の「耳の線の垂線で傾ける」は、耳ランドマーク（7,8）のブレで頭が跳ねる原因だったので廃止。
+        // 回転量には上限を付け、首の骨にも回転の一部（45%）を配分して、1か所で折れ曲がらないようにする。
         if (_head != null)
         {
-            Vector3 earMid = (_w[7] + _w[8]) * 0.5f;
-            Vector3 neckDir = earMid - (_w[11] + _w[12]) * 0.5f;
-            Vector3 earLine = _w[8] - _w[7];
-            Vector3 headUp = neckDir.sqrMagnitude > 1e-8f ? neckDir.normalized : Vector3.up;
-            if (earLine.magnitude > 0.12f * up.magnitude)   // 耳が見えているときだけ使う
+            Vector3 shoulderMid = (_ws[11] + _ws[12]) * 0.5f;
+            Vector3 headDir = _ws[0] - shoulderMid;
+            bool headOk = _vis[0] >= 0.4f
+                          && headDir.magnitude > 0.3f * up.magnitude
+                          && headDir.sqrMagnitude > 1e-8f;
+            if (headOk)
             {
-                Vector3 perp = new Vector3(-earLine.y, earLine.x, 0f).normalized;
-                headUp = (headUp + perp).normalized;
-            }
-            Vector3 headFwd = flattenZ ? Vector3.forward : Vector3.Cross(earLine, headUp);
-            if (headFwd.sqrMagnitude > 1e-6f)
-            {
-                Quaternion target = _root.rotation * Quaternion.LookRotation(headFwd, headUp) * _headRestRot;
-                _headCurrent = Quaternion.Slerp(_headCurrent, target, k);
+                Vector3 headUp = headDir.normalized;
+                Vector3 headFwd = flattenZ ? Vector3.forward : Vector3.Cross(_ws[8] - _ws[7], headUp);
+                if (headFwd.sqrMagnitude < 1e-6f) headFwd = Vector3.forward;
+                Quaternion delta = Quaternion.LookRotation(headFwd.normalized, headUp);
+                float ang = Quaternion.Angle(Quaternion.identity, delta);
+                if (ang > maxHeadAngle) delta = Quaternion.Slerp(Quaternion.identity, delta, maxHeadAngle / ang);
+                float kh = 1f - Mathf.Exp(-smoothing * 0.5f * Time.deltaTime);   // 頭はゆっくり追わせる
+                Quaternion headTarget = _root.rotation * delta * _headRestRot;
+                _headCurrent = Quaternion.Slerp(_headCurrent, headTarget, kh);
                 _head.rotation = _headCurrent;
+                if (_neck != null)
+                {
+                    Quaternion neckTarget = _root.rotation * Quaternion.Slerp(Quaternion.identity, delta, 0.45f) * _neckRestRot;
+                    _neckCurrent = Quaternion.Slerp(_neckCurrent, neckTarget, kh);
+                    _neck.rotation = _neckCurrent;
+                }
             }
         }
 
-        // 腕・脚
+        // 腕・脚・手
         float torso2D = up.magnitude;
         foreach (var p in _parts)
         {
-            Vector3 dir = _w[p.b] - _w[p.a];
+            // 信頼できない点（隠れている等）では回さない。前回の回転を保つ
+            if (_vis[p.a] < minVisibility || _vis[p.b] < minVisibility) continue;
+            Vector3 dir = _ws[p.b] - _ws[p.a];
             // 奥行き方向を向いて、ほぼ点に見える骨は更新しない(向きが不安定になるため)
             if (dir.magnitude < 0.08f * torso2D || dir.sqrMagnitude < 1e-8f) continue;
             Quaternion target = _root.rotation *
                 (Quaternion.FromToRotation(p.restDir, dir.normalized) * p.restRot);
-            p.current = Quaternion.Slerp(p.current, target, k);
+            float kp = p.distal ? 1f - Mathf.Exp(-smoothing * distalSmoothingScale * Time.deltaTime) : k;
+            p.current = Quaternion.Slerp(p.current, target, kp);
             p.bone.rotation = p.current;
         }
 

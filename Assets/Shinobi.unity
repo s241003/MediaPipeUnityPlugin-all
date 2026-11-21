@@ -1111,6 +1111,7 @@ MonoBehaviour:
   shinRadiusRatio: 0.11
   footRadiusRatio: 0.08
   showProxies: 0
+  toggleProxiesKey: 118
   proxyZOffset: 1.5
   proxyThin: 0.4
   flashSeconds: 1.2
@@ -1167,6 +1168,10 @@ MonoBehaviour:
   mirrorLeftRight: 1
   flattenZ: 1
   staleSeconds: 0.5
+  landmarkSmoothing: 25
+  minVisibility: 0.3
+  maxHeadAngle: 50
+  distalSmoothingScale: 0.6
   followPosition: 1
   moveRangeX: 40
   moveRangeY: 24
@@ -1311,8 +1316,8 @@ MonoBehaviour:
   retarget: {fileID: 1920210232}
   body: {fileID: 1896898374}
   spawnerObject: {fileID: 1449294827}
-  timeLimit: 60
-  maxLives: 5
+  timeLimit: 600
+  maxLives: 100
   countdownSeconds: 3
   perfectPoints: 100
   goodPoints: 50

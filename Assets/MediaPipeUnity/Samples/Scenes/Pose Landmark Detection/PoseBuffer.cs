@@ -7,17 +7,30 @@ public static class PoseBuffer
 {
     static readonly object _lock = new object();
     static readonly Vector3[] _latest = new Vector3[33];
+    static readonly float[] _visibility = new float[33];   // 各点の信頼度（0〜1）。隠れている点ほど低い
     // 単調時計（Environment.TickCount64 は Unity の .NET プロファイルに無いため Stopwatch を使う）
     static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
     static long _lastWriteMs = -1;
 
     public static void Write(int i, float x, float y, float z)
     {
+        Write(i, x, y, z, 1f);
+    }
+
+    public static void Write(int i, float x, float y, float z, float visibility)
+    {
         lock (_lock)
         {
             _latest[i] = new Vector3(x, y, z);
+            _visibility[i] = visibility;
             _lastWriteMs = _clock.ElapsedMilliseconds;
         }
+    }
+
+    // その点の信頼度（隠れている・ブレている点は低い）。信頼できない点で骨を回さないための判定に使う
+    public static float Visibility(int i)
+    {
+        lock (_lock) { return _visibility[i]; }
     }
 
     // データがあれば時刻を問わずコピーする（後方互換用）

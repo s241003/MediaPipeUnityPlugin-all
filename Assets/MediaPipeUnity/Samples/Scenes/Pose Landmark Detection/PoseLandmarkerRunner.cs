@@ -165,7 +165,7 @@ namespace Mediapipe.Unity.Sample.PoseLandmarkDetection
       {
           var lms = result.poseLandmarks[0].landmarks;
           for (int i = 0; i < lms.Count && i < 33; i++)
-              PoseBuffer.Write(i, lms[i].x, lms[i].y, lms[i].z);
+              PoseBuffer.Write(i, lms[i].x, lms[i].y, lms[i].z, lms[i].visibility ?? 1f);   // 信頼度も渡す（隠れた点で骨を回さない判定に使う）
       }
       _poseLandmarkerResultAnnotationController.DrawLater(result);
       DisposeAllMasks(result);
