@@ -11,10 +11,14 @@ using UnityEngine;
 //  - 認識の安定化（v1.12）：ランドマーク自体を平滑化し、信頼度（visibility）の低い点では骨を回さない。
 //    頭は「肩→鼻」の向きだけで決め（耳の線で傾ける旧方式はブレの原因だったので廃止）、
 //    回転上限＋首への配分つき。手の骨も手首→指の付け根の向きで駆動する。
-//  - v1.12a（2026-11-19）：信頼度（visibility）の左右も鏡像入れ替えに合わせた。
-//    v1.12 はランドマークの座標だけ SwapLR で入れ替え、信頼度は入れ替え前の番号で
-//    見ていたため、片手・片足だけ隠れたときに逆側の骨が止まる（隠れた側は回り続ける）
-//    ことがあった。_vis[] に入れ替え後の信頼度を並べ、判定はすべて _vis[] で行う。
+//  - v1.13（2026-11-21）：左右の鏡像入れ替え（旧 mirrorLeftRight / SwapLR）を廃止し、
+//    ランドマークを解剖学どおり（左の骨←左のランドマーク）に使うよう戻した。これが交差の原因だった。
+//    理由：画像座標→アバター座標の変換 (0.5 - x) 自体が「向かい合っている」ことの補正であり、
+//    その上に左右ラベルまで入れ替えると二重に鏡像化され、左腕の目標方向が反対側（+X）を指して
+//    両手を挙げただけで腕が交差する。モデルの実測でも裏付け済み：Y Bot は FBX 内で正面(+Z)向き・
+//    解剖学左が +X 側、Unity 取り込みで X が反転するため、ルートのローカル空間では左腕の骨は
+//    -X 側にある。(0.5 - x) 変換後の左腕の目標方向は -X 側を向くので、入れ替えなしが幾何学的に正しい。
+//    ※シーンに残っている旧 mirrorLeftRight の値は、項目自体が無くなったため無視される（エラーにはならない）。
 public class AvatarRetarget : MonoBehaviour
 {
     [Header("アバター(Humanoid設定のモデルのAnimator)")]
@@ -24,7 +28,6 @@ public class AvatarRetarget : MonoBehaviour
     public float aspect = 4f / 3f;     // カメラの 幅/高さ (640x480 なら 4/3)
     public float zScale = 1f;          // Flatten Z がオフのときだけ使う
     public float smoothing = 15f;      // 大きいほど速く追従、小さいほど滑らか
-    public bool mirrorLeftRight = true;   // アバターと向かい合うので鏡像が正解（右手を挙げたら画面右側の腕が上がる）。逆に感じたらオフ
 
     [Header("奥行き")]
     public bool flattenZ = true;       // オン:骨の向きを平面内で決める（アバター自体は動かない）
@@ -64,12 +67,6 @@ public class AvatarRetarget : MonoBehaviour
         (HumanBodyBones.RightHand,     HumanBodyBones.RightMiddleProximal, 16, 20),
     };
 
-    // ランドマークの左右ペア（鏡像化のために入れ替える）
-    static readonly int[] SwapLR = {
-        0, 4, 5, 6, 1, 2, 3, 8, 7, 10, 9, 12, 11, 14, 13, 16, 15,
-        18, 17, 20, 19, 22, 21, 24, 23, 26, 25, 28, 27, 30, 29, 32, 31
-    };
-
     class Part
     {
         public Transform bone;
@@ -91,7 +88,7 @@ public class AvatarRetarget : MonoBehaviour
     readonly Vector3[] _raw = new Vector3[33];
     readonly Vector3[] _w = new Vector3[33];
     readonly Vector3[] _ws = new Vector3[33];   // 平滑化したランドマーク（実際に使うのはこちら）
-    readonly float[] _vis = new float[33];     // 入れ替え後の信頼度（骨と同じ左右で見る。座標の SwapLR と対にする）
+    readonly float[] _vis = new float[33];     // ランドマークと同じ番号の信頼度
     bool _wsInit;
 
     // 基準（ホーム）を「いまの立ち位置」に取り直す。GameManager がゲーム開始時に呼ぶ
@@ -119,6 +116,14 @@ public class AvatarRetarget : MonoBehaviour
         }
         _parts = list.ToArray();
 
+        // 左右の向きの自己診断（1回だけ）：モデルの左上腕の restDir.x がマイナス、右がプラスなら
+        // 「ルートのローカル空間で左腕は -X 側」という想定どおり。逆だったらモデル側の左右が想定と違う。
+        foreach (var p in _parts)
+        {
+            if (p.a == 11) Debug.Log($"[AvatarRetarget] 左上腕 restDir.x = {p.restDir.x:F2}（マイナスが想定どおり）");
+            if (p.a == 12) Debug.Log($"[AvatarRetarget] 右上腕 restDir.x = {p.restDir.x:F2}（プラスが想定どおり）");
+        }
+
         _hips = animator.GetBoneTransform(HumanBodyBones.Hips);
         _hipsRestRot = Quaternion.Inverse(_root.rotation) * _hips.rotation;
         _hipsCurrent = _hips.rotation;
@@ -143,13 +148,14 @@ public class AvatarRetarget : MonoBehaviour
         // 古いポーズでは更新しない（人が画角から外れたらアバターはその場で止まる）
         if (!PoseBuffer.TryReadFresh(_raw, staleSeconds)) return;
 
+        // 画像座標→アバターのローカル座標へ。(0.5 - x) が「向かい合っている」ことの補正そのもの。
+        // ここで左右ラベルは入れ替えない（入れ替えると二重鏡像になり腕が交差する。v1.13 のコメント参照）。
         for (int i = 0; i < 33; i++)
         {
-            int src = mirrorLeftRight ? SwapLR[i] : i;   // 鏡像：左の骨には右側のランドマークを使う
-            _w[i] = new Vector3((0.5f - _raw[src].x) * aspect,
-                                (0.5f - _raw[src].y),
-                                flattenZ ? 0f : -_raw[src].z * aspect * zScale);
-            _vis[i] = PoseBuffer.Visibility(src);   // 信頼度も同じ src（入れ替え後）で取る。入れ替え前だと左右が逆になる
+            _w[i] = new Vector3((0.5f - _raw[i].x) * aspect,
+                                (0.5f - _raw[i].y),
+                                flattenZ ? 0f : -_raw[i].z * aspect * zScale);
+            _vis[i] = PoseBuffer.Visibility(i);
         }
 
         // ランドマーク自体を平滑化する（手首・耳などの細かいブレを、そのまま骨に伝えない）

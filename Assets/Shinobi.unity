@@ -393,7 +393,7 @@ PrefabInstance:
     - target: {fileID: -8679921383154817045, guid: 45f14283b3591b84ea27f2305a1f922f,
         type: 3}
       propertyPath: m_LocalRotation.w
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 45f14283b3591b84ea27f2305a1f922f,
         type: 3}
@@ -403,7 +403,7 @@ PrefabInstance:
     - target: {fileID: -8679921383154817045, guid: 45f14283b3591b84ea27f2305a1f922f,
         type: 3}
       propertyPath: m_LocalRotation.y
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 45f14283b3591b84ea27f2305a1f922f,
         type: 3}
@@ -418,7 +418,7 @@ PrefabInstance:
     - target: {fileID: -8679921383154817045, guid: 45f14283b3591b84ea27f2305a1f922f,
         type: 3}
       propertyPath: m_LocalEulerAnglesHint.y
-      value: 180
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: -8679921383154817045, guid: 45f14283b3591b84ea27f2305a1f922f,
         type: 3}
@@ -1165,7 +1165,6 @@ MonoBehaviour:
   aspect: 1.3333334
   zScale: 1
   smoothing: 15
-  mirrorLeftRight: 1
   flattenZ: 1
   staleSeconds: 0.5
   landmarkSmoothing: 25
