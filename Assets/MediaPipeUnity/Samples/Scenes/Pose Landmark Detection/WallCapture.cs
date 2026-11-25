@@ -27,7 +27,7 @@ public class WallCapture : MonoBehaviour
     public string wallName = "Wall_01";
 
     [Header("穴の大きさ（T = 胴の長さ）")]
-    public float marginRatio = 0.25f;        // 穴の余裕。判定側の太り（0.12T）と接触のしきい値（0.10T）の合計より大きく要る。0.25 が検証済みの推奨値（下限は約0.23）
+    public float marginRatio = 0.15f;        // 穴の余裕。判定側の太り（0.06T）と接触のしきい値（0.05T）の合計より大きく要る。0.15 が推奨値（下限は約0.12）。※ WallJudge2D v1.6（格子0.1）とセットで使うこと。旧判定（格子0.2）では接触して Bad になる
     public float framePaddingRatio = 0.55f;  // 穴の外側に残す壁の幅
     public float thickness = 2.5f;           // 壁の厚み（ワールド単位）
 
@@ -39,6 +39,19 @@ public class WallCapture : MonoBehaviour
     GameObject _preview;
     Mesh _mesh;
     float _capturedT;
+    Material _defaultMat;
+
+    // プレビュー用の素材。wallMaterial が空だと描画されないので、無地の標準素材を用意する
+    Material PreviewMaterial()
+    {
+        if (wallMaterial != null) return wallMaterial;
+        if (_defaultMat == null)
+        {
+            _defaultMat = new Material(Shader.Find("Standard"));
+            _defaultMat.color = new Color(0.85f, 0.87f, 0.92f);
+        }
+        return _defaultMat;
+    }
 
     void Update()
     {
@@ -80,7 +93,7 @@ public class WallCapture : MonoBehaviour
         _preview.name = "CapturedWallPreview_" + wallName;
         _preview.GetComponent<MeshFilter>().sharedMesh = _mesh;
         var rend = _preview.GetComponent<MeshRenderer>();
-        if (wallMaterial != null) rend.sharedMaterial = wallMaterial;
+        rend.sharedMaterial = PreviewMaterial();
         _preview.transform.position = new Vector3(origin.x, origin.y, body.PlaneZ);
         _preview.transform.rotation = Quaternion.identity;
         _preview.transform.localScale = Vector3.one;
@@ -204,6 +217,15 @@ public class WallCapture : MonoBehaviour
                 }
             }
             AddRim(isl, true, bevel, hz, verts, uvs, tris);
+        }
+
+        // Unity の三角形は「時計回り＝表」。ここまでの組み立ては反時計回り前提で作ったので、
+        // 最後に全部の三角形の向きを反転して表裏を正す（判定は三角形の向きに影響されない）。
+        for (int i = 0; i < tris.Count; i += 3)
+        {
+            int tmp = tris[i + 1];
+            tris[i + 1] = tris[i + 2];
+            tris[i + 2] = tmp;
         }
 
         var mesh = new Mesh { name = "CapturedWall" };
@@ -603,6 +625,20 @@ public class WallCapture : MonoBehaviour
     }
 
 #if UNITY_EDITOR
+    // wallMaterial が空のまま保存しても壁が見えるよう、無地の標準素材をアセットとして用意する
+    Material DefaultMaterialAsset(string folder)
+    {
+        string path = folder + "/DefaultWall.mat";
+        var mat = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(path);
+        if (mat == null)
+        {
+            mat = new Material(Shader.Find("Standard"));
+            mat.color = new Color(0.85f, 0.87f, 0.92f);
+            UnityEditor.AssetDatabase.CreateAsset(mat, path);
+        }
+        return mat;
+    }
+
     [ContextMenu("壁を prefab + WallData として保存")]
     public void SaveAsAssets()
     {
@@ -620,7 +656,7 @@ public class WallCapture : MonoBehaviour
         var go = new GameObject(safe);
         go.AddComponent<MeshFilter>().sharedMesh = UnityEditor.AssetDatabase.LoadAssetAtPath<Mesh>(meshPath);
         var rend = go.AddComponent<MeshRenderer>();
-        if (wallMaterial != null) rend.sharedMaterial = wallMaterial;
+        rend.sharedMaterial = wallMaterial != null ? wallMaterial : DefaultMaterialAsset(folder);
         string prefabPath = folder + "/" + safe + ".prefab";
         UnityEditor.PrefabUtility.SaveAsPrefabAsset(go, prefabPath);
         DestroyImmediate(go);

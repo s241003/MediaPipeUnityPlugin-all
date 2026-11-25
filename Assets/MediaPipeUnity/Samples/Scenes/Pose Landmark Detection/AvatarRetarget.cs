@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// ポーズ（骨の向き）と、腰の横・縦移動をアバターへ反映する。
+// ポーズ（骨の向き）と、腰の横移動をアバターへ反映する。縦は基準面で固定（v1.15〜）。
 // 刷新点：
 //  - 旧版のキャリブレーション（直立3秒＋1秒平均）は廃止。代わりに「ゲーム開始時の立ち位置」を
 //    基準（ホーム）にして、そこからの腰の移動量をそのままアバターの X,Y に写す。
@@ -41,12 +41,11 @@ public class AvatarRetarget : MonoBehaviour
     public float maxHeadAngle = 50f;        // 頭の回転の上限（度）。首があらぬ方向へ曲がらないように
     public float distalSmoothingScale = 0.6f;   // 前腕・手は平滑化を強めにする（ブレが目立つため）
 
-    [Header("位置の追従（腰の横・縦移動）")]
+    [Header("位置の追従（横だけ。縦は基準面で固定）")]
     public bool followPosition = true;
     public float moveRangeX = 40f;     // 腰が画面の端（中心から0.5）まで動いたときのアバターの移動量×2。提案値：実測で調整
-    public float moveRangeY = 24f;     // 縦は横より小さめ。提案値：実測で調整
     public bool flipX = false;         // 左右が逆に動くときだけオン
-    public bool flipY = false;         // 上下が逆に動くときだけオン
+    public float homeYOffset = 0f;     // 縦の固定位置の微調整（基準面＝シーンで置いた高さ からのずらし量）。壁の穴と縦が合わないときだけ触る
 
     // ポーズが生きていれば true。GameManager はこれを見て開始する（キャリブレーションの代わり）
     public bool IsReady => PoseBuffer.HasFreshData;
@@ -165,17 +164,17 @@ public class AvatarRetarget : MonoBehaviour
 
         float k = 1f - Mathf.Exp(-smoothing * Time.deltaTime);
 
-        // 位置の追従：腰（23,24の中点）の画面内位置を、基準からの移動量としてアバターの X,Y に写す。
+        // 位置の追従：腰（23,24の中点）の画面内位置を、基準からの移動量としてアバターの X にだけ写す。
+        // 縦（Y）は基準面＝シーンで置いた高さ（_homePos.y）に固定する。利用者がしゃがんだり背伸びしても
+        // 体全体は上下せず、壁の穴との縦位置が常に合う（しゃがむ動き自体は骨の回転で表現される）。
         // 画面の向きの都合：利用者が自分の左へ動くと画像の x は増えるが、画面では左＝world の -X 側なので符号を反転する（骨の変換と同じ流儀）。
         if (followPosition)
         {
             Vector2 hip = new Vector2((_raw[23].x + _raw[24].x) * 0.5f, (_raw[23].y + _raw[24].y) * 0.5f);
             if (!_hasRef) { _refHip = hip; _hasRef = true; }
             float ox = -(hip.x - _refHip.x) * moveRangeX * (flipX ? -1f : 1f);
-            float oy = -(hip.y - _refHip.y) * moveRangeY * (flipY ? -1f : 1f);
             ox = Mathf.Clamp(ox, -moveRangeX * 0.6f, moveRangeX * 0.6f);
-            oy = Mathf.Clamp(oy, -moveRangeY * 0.6f, moveRangeY * 0.6f);
-            Vector3 target = new Vector3(_homePos.x + ox, _homePos.y + oy, _homePos.z);
+            Vector3 target = new Vector3(_homePos.x + ox, _homePos.y + homeYOffset, _homePos.z);
             _root.position = Vector3.Lerp(_root.position, target, k);
         }
 

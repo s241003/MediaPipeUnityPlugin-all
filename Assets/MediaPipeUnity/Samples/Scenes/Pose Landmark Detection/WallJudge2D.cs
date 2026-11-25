@@ -39,7 +39,7 @@ public class WallJudge2D : MonoBehaviour
     }
 
     [Header("穴の読み取り")]
-    public float cellRatio = 0.2f;            // 格子の大きさ（胴の長さに対する比）。旧 WallJudge と同じ初期値
+    public float cellRatio = 0.1f;            // 格子の大きさ（胴の長さに対する比）。v1.6 で 0.2→0.1 に細分化：焼き込みの太り（0.6セル）と接触マージン（0.5セル）が半分になり、キャプチャ側のマージンを 0.15 まで下げられる
     public float solidDilateRatio = 0.6f;     // 実体を太らせる量（格子1辺に対する比）。薄い縁の隙間から「外側の空気」が穴へ漏れるのを防ぐ
 
     [Header("ポーズの一致度（穴の充填率）")]
