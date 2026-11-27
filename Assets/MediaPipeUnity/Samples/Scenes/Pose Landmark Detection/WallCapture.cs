@@ -11,6 +11,15 @@ using UnityEngine;
 //   4. Inspector の右クリックメニュー「壁を prefab + WallData として保存」でアセット化する
 //   5. できた WallData を WallSpawner の walls に追加する
 //
+// v1.19: 自動キャプチャを追加。Inspector の「自動キャプチャ」をオンにすると、再生中に
+//   autoIntervalSeconds 秒ごとに自動で記録し、autoSave がオンなら連番の名前ですぐ保存まで行う。
+//   体が映っていない等で記録に失敗した回は飛ばして、次の間隔でまた試す。
+//
+// v1.18: 壁が生成される位置を Inspector からずらせる「生成位置オフセット」を追加。
+//   x, y はプレビューの位置と、保存される WallData の Position Offset（＝ゲーム本番の出現位置）に効く。
+//   z はプレビューの奥行きだけに効く（本番の出現位置は WallSpawner が x, y だけを使うため）。
+//   メッシュ自体は変えず、位置だけをずらすので、後から WallData 側で直すこともできる。
+//
 // 穴の形 ＝ 各カプセル（骨の線分＋判定半径）を marginRatio×T だけ太らせた形の合体。
 // 輪郭は距離場から marching squares で取り、Chaikin 平滑化で角を落として「なめらか」に見せる。
 // 平滑化では、マージンを食いすぎる点は元に戻すガードを掛けている（穴が設計より狭くならない）。
@@ -26,6 +35,14 @@ public class WallCapture : MonoBehaviour
     public KeyCode captureKey = KeyCode.C;
     public string wallName = "Wall_01";
 
+    [Header("自動キャプチャ")]
+    public bool autoCapture = false;         // オンにすると、再生中に一定間隔で自動で記録する
+    public float autoIntervalSeconds = 5f;   // 自動記録の間隔（秒）。次のポーズに移る時間を見て決める
+    public bool autoSave = true;             // 記録したらすぐ保存まで行う（保存名は wallName_001 のように連番。保存はエディタでのみ有効）
+
+    [Header("生成位置")]
+    public Vector3 positionOffset = Vector3.zero;  // 壁が生成される位置のずらし量（ワールド単位）。x, y はプレビューと本番の出現位置に、z はプレビューの奥行きに効く
+
     [Header("穴の大きさ（T = 胴の長さ）")]
     public float marginRatio = 0.15f;        // 穴の余裕。判定側の太り（0.06T）と接触のしきい値（0.05T）の合計より大きく要る。0.15 が推奨値（下限は約0.12）。※ WallJudge2D v1.6（格子0.1）とセットで使うこと。旧判定（格子0.2）では接触して Bad になる
     public float framePaddingRatio = 0.55f;  // 穴の外側に残す壁の幅
@@ -40,6 +57,8 @@ public class WallCapture : MonoBehaviour
     Mesh _mesh;
     float _capturedT;
     Material _defaultMat;
+    float _autoTimer;
+    int _autoCount;
 
     // プレビュー用の素材。wallMaterial が空だと描画されないので、無地の標準素材を用意する
     Material PreviewMaterial()
@@ -56,19 +75,48 @@ public class WallCapture : MonoBehaviour
     void Update()
     {
         if (captureKey != KeyCode.None && Input.GetKeyDown(captureKey)) Capture();
+
+        if (autoCapture)
+        {
+            _autoTimer += Time.deltaTime;
+            if (_autoTimer >= Mathf.Max(0.5f, autoIntervalSeconds))
+            {
+                _autoTimer = 0f;
+                AutoCaptureOnce();
+            }
+        }
+    }
+
+    // 自動キャプチャ1回分：記録して、autoSave がオンなら連番の名前ですぐ保存する
+    void AutoCaptureOnce()
+    {
+        if (!TryCapture()) return;  // 体が映っていない等で失敗した回は飛ばし、次の間隔でまた試す
+#if UNITY_EDITOR
+        if (autoSave)
+        {
+            _autoCount++;
+            SaveAsAssets(wallName + "_" + _autoCount.ToString("000"));
+        }
+#endif
     }
 
     [ContextMenu("いまのポーズで壁を作る")]
     public void Capture()
     {
+        TryCapture();
+    }
+
+    // 記録本体。成功したら true、失敗したら false（理由は Console に出す）
+    public bool TryCapture()
+    {
         if (body == null) body = BodySegments2D.Instance;
-        if (body == null) { Debug.LogError("WallCapture: BodySegments2D が見つかりません", this); return; }
+        if (body == null) { Debug.LogError("WallCapture: BodySegments2D が見つかりません", this); return false; }
         body.Refresh();
         float T = body.TorsoLength;
         if (T <= 1e-4f || body.Segments.Count == 0)
         {
             Debug.LogError("WallCapture: 体の線分がまだできていません（カメラに全身が映ってから押してください）", this);
-            return;
+            return false;
         }
 
         // 原点 ＝ アバターの足元（x,y）。WallSpawner が spawnPoint に置く位置と対応させる
@@ -81,7 +129,7 @@ public class WallCapture : MonoBehaviour
         string report;
         _mesh = BuildWallMesh(local, T, marginRatio * T, framePaddingRatio * T,
                               thickness, bevelRatio * T, gridCellRatio * T, smoothPasses, out report);
-        if (_mesh == null) { Debug.LogError("WallCapture: メッシュ生成に失敗しました。" + report, this); return; }
+        if (_mesh == null) { Debug.LogError("WallCapture: メッシュ生成に失敗しました。" + report, this); return false; }
         _capturedT = T;
 
         if (_preview == null)
@@ -94,13 +142,14 @@ public class WallCapture : MonoBehaviour
         _preview.GetComponent<MeshFilter>().sharedMesh = _mesh;
         var rend = _preview.GetComponent<MeshRenderer>();
         rend.sharedMaterial = PreviewMaterial();
-        _preview.transform.position = new Vector3(origin.x, origin.y, body.PlaneZ);
+        _preview.transform.position = new Vector3(origin.x + positionOffset.x, origin.y + positionOffset.y, body.PlaneZ + positionOffset.z);
         _preview.transform.rotation = Quaternion.identity;
         _preview.transform.localScale = Vector3.one;
 
         Debug.Log("[WallCapture] 記録しました: " + wallName + " " + report +
                   " プレビューは判定平面の位置に出ています。そのままのポーズで壁として通れるか確認し、" +
                   "良ければ右クリックメニューから保存してください。", this);
+        return true;
     }
 
     // 距離場：点 p から「カプセルの表面」までの距離（中なら負）
@@ -642,12 +691,18 @@ public class WallCapture : MonoBehaviour
     [ContextMenu("壁を prefab + WallData として保存")]
     public void SaveAsAssets()
     {
+        SaveAsAssets(wallName);
+    }
+
+    // saveName の名前で保存する（自動キャプチャの連番保存からも使う）
+    public void SaveAsAssets(string saveName)
+    {
         if (_mesh == null) { Debug.LogError("WallCapture: 先にポーズを記録してください（C キー）", this); return; }
         const string folder = "Assets/Walls";
         if (!UnityEditor.AssetDatabase.IsValidFolder(folder))
             UnityEditor.AssetDatabase.CreateFolder("Assets", "Walls");
 
-        string safe = string.IsNullOrEmpty(wallName) ? "Wall" : wallName;
+        string safe = string.IsNullOrEmpty(saveName) ? "Wall" : saveName;
         string meshPath = folder + "/" + safe + ".mesh.asset";
         var existing = UnityEditor.AssetDatabase.LoadAssetAtPath<Mesh>(meshPath);
         if (existing != null) UnityEditor.EditorUtility.CopySerialized(_mesh, existing);
@@ -667,7 +722,7 @@ public class WallCapture : MonoBehaviour
         data.speed = 10f;
         data.uniformScale = 1f;
         data.rotationOffset = Vector3.zero;
-        data.positionOffset = Vector3.zero;
+        data.positionOffset = positionOffset;
         data.weight = 1f;
         string dataPath = folder + "/" + safe + "_Data.asset";
         var oldData = UnityEditor.AssetDatabase.LoadAssetAtPath<WallData>(dataPath);
